@@ -273,6 +273,25 @@ class Deck:
                           + ["-chardev", "socket,id=spilink,path=%s,server=on,wait=off" % self.sock]
                           + icount + ["-nographic"] + audio + net + mon_args)
 
+        # Apple's vmnet bridged backend requires root unless QEMU has a
+        # provisioning entitlement.  Keep that privilege limited to MAIN: the
+        # display process, virtual-deck app, relay and launcher stay as the
+        # logged-in user.  sudo normally resets the environment, but MAIN's
+        # board model is configured through CDJ_/C66X_ variables, so pass just
+        # those through /usr/bin/env.  A permissive umask is needed because the
+        # unprivileged GUI connects to MAIN's local SPI socket in /tmp.
+        if env.get("CDJ_NET_SUDO") == "1":
+            if host.is_windows():
+                raise RuntimeError("CDJ_NET_SUDO is only supported on macOS/Linux hosts")
+            keep = {k: v for k, v in env.items()
+                    if k.startswith(("CDJ_", "C66X_"))
+                    or k in ("AUTOJIT", "MODULE", "DYLD_LIBRARY_PATH",
+                             "DYLD_FALLBACK_LIBRARY_PATH", "PATH", "TMPDIR")}
+            sudo_env = ["sudo", "-n", "/usr/bin/env"] + ["%s=%s" % item for item in sorted(keep.items())]
+            self.main_argv = (sudo_env + ["/bin/sh", "-c", "umask 000; exec \"$@\"", "cdj-main"]
+                              + self.main_argv)
+            self.notes.append((1, "[%s] MAIN uses sudo only for the real vmnet bridge" % tag))
+
         # Display firmware mods are patched into a copy of the image, per run:
         # each patch_gui.py mod <name> is on when CDJ_GUI_<NAME>=1.
         gui_image = model_extract_n + "/gui_unpacked.bin"
@@ -420,7 +439,11 @@ class Deck:
                 shutil.copyfile(src, dst)
         if self.media_copy:
             shutil.copyfile(*self.media_copy)
-        self.main = _spawn(self.main_argv, self.main_log, env)
+        # sudo tickets on macOS are scoped to the invoking terminal.  The
+        # privileged vmnet MAIN must retain that session; the normal default
+        # remains a separate session so Ctrl-C is handled by the launcher.
+        self.main = _spawn(self.main_argv, self.main_log, env,
+                           new_session=env.get("CDJ_NET_SUDO") != "1")
         # Exists, not is-a-socket: on Windows the unix socket is a reparse point.
         for _ in range(100):
             if os.path.lexists(self.sock):
@@ -529,12 +552,12 @@ class Deck:
             chain.remove(self.media_img)
 
 
-def _spawn(argv, log, env):
+def _spawn(argv, log, env, new_session=True):
     with open(log, "wb") as f:
         # Its own process group: a Ctrl-C reaches the launcher, which stops the
         # boards in order, instead of killing them where they stand.
         kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if host.is_windows() \
-            else {"start_new_session": True}
+            else ({"start_new_session": True} if new_session else {})
         return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, env=env, **kw)
 
 

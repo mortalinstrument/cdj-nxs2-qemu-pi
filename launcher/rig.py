@@ -153,10 +153,19 @@ def rig_env(env, tag, ndecks, frames):
         export_default(env, "CDJ_PCALL2", "0x08345574:0x08516448:0x2a:0x50000001:0x0")
         if nonempty(env, "DJLINK_DHCP", "1") != "1":
             dhcp = None
-        say("[%s] Pro DJ Link ON: %s, MAC %s, leases -> /tmp/cdj-%s-dhcpd.log" % (tag, where, env["CDJ_ETHER_MAC"], tag))
-        if env["DJLINK"] == "1":
-            say("[%s]   watch it: python3 scripts/net/capture_link.py %s /tmp/cdj-%s.pcap  (score with score_link.py)"
-                % (tag, group, tag))
+        if env["CDJ_NETDEV"].startswith("vmnet-bridged,"):
+            iface = next((part.split("=", 1)[1] for part in env["CDJ_NETDEV"].split(",")
+                          if part.startswith("ifname=")), "unknown")
+            say("[%s] Pro DJ Link ON: real bridged interface %s, MAC %s" %
+                (tag, iface, env["CDJ_ETHER_MAC"]))
+            if nonempty(env, "DJLINK_DHCP", "1") != "1":
+                say("[%s]   private DHCP disabled; the physical LAN supplies addressing." % tag)
+        else:
+            say("[%s] Pro DJ Link ON: %s, MAC %s, leases -> /tmp/cdj-%s-dhcpd.log" %
+                (tag, where, env["CDJ_ETHER_MAC"], tag))
+            if env["DJLINK"] == "1":
+                say("[%s]   watch it: python3 scripts/net/capture_link.py %s /tmp/cdj-%s.pcap  (score with score_link.py)"
+                    % (tag, group, tag))
     else:
         say("[%s] Pro DJ Link off (DJLINK=0)" % tag)
     # MAIN/DSP lockstep quantum. It sets how coarsely MAIN sees the DSP's play

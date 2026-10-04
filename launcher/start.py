@@ -118,6 +118,20 @@ def main(argv):
     if lay.packaged:
         env["MAIN_QEMU"], env["GUI_QEMU"] = lay.qemu_binaries()
     env.update(RELAY_PORT=c["CDJ_RELAY_PORT"], DJLINK=c["CDJ_DJLINK"], GROUP=c["CDJ_GROUP"])
+    # macOS's vmnet-bridged backend needs root for an unsigned QEMU build.
+    # boot_deck.py confines that privilege to MAIN, but check the sudo ticket
+    # here so a virtual-deck launch does not appear to start and then lose its
+    # MAIN board in a background log.
+    if env.get("CDJ_NET_SUDO") == "1":
+        if host.is_windows():
+            chain.err("CDJ_NET_SUDO is only supported on macOS/Linux hosts.")
+            return 2
+        if not env.get("CDJ_NETDEV", "").startswith("vmnet-bridged,"):
+            chain.err("CDJ_NET_SUDO=1 requires CDJ_NETDEV=vmnet-bridged,...")
+            return 2
+        if subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode:
+            chain.err("real vmnet bridging needs an administrator ticket; run 'sudo -v' in Terminal, then start again.")
+            return 1
     # setup.sh already steered CDJ_RELAY_PORT clear of a reserved range, but
     # Windows picks new Hyper-V/WSL ranges on every boot, so the port it chose
     # then can be inside one now. Check again here, not just at setup time.
